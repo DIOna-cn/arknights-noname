@@ -338,23 +338,24 @@ async function fetchToFile(url, target) {
 		// 一旦因为单个源失败就禁用 fetch，在 Android 上（引擎下载本来就是坏的）
 		// 后面几个源就全废了，整个更新直接失败。要不要放弃 fetch 交给
 		// tryDownload 去累计判断。
-		return { ok: false, fatal: false, reason: `fetch 失败（${(e && e.name) || "未知错误"}）` };
+		return { ok: false, fatal: false, network: true, reason: `fetch 失败（${(e && e.name) || "未知错误"}）` };
 	}
 	if (!response.ok) {
-		// 4xx/5xx 是**这个源**的问题，换一个源就好，fetch 本身是可用的
-		return { ok: false, fatal: false, reason: `HTTP ${response.status}` };
+		// 4xx/5xx 是**这个源**的问题，换一个源就好，fetch 本身是可用的。
+		// 正因为它证明「fetch 这条路是通的」，所以不能拿它去累计「环境不支持 fetch」。
+		return { ok: false, fatal: false, network: false, reason: `HTTP ${response.status}` };
 	}
 	let buffer;
 	try {
 		buffer = await response.arrayBuffer();
 	} catch (e) {
-		return { ok: false, fatal: false, reason: "读取响应体失败" };
+		return { ok: false, fatal: false, network: true, reason: "读取响应体失败" };
 	}
 	const slash = target.lastIndexOf("/");
 	const dir = slash >= 0 ? target.slice(0, slash) : "";
 	const name = slash >= 0 ? target.slice(slash + 1) : target;
 	if (!(await writeAsync(buffer, dir, name))) {
-		return { ok: false, fatal: false, reason: "写文件失败" };
+		return { ok: false, fatal: false, network: false, reason: "写文件失败" };
 	}
 	return { ok: true };
 }
@@ -381,7 +382,14 @@ async function tryDownload(url, target) {
 			return { ok: true, via: "fetch" };
 		}
 		problems.push(viaFetch.reason);
-		fetchMisses++;
+		if (viaFetch.fatal || viaFetch.network) {
+			fetchMisses++;
+		} else {
+			// 拿到了 HTTP 响应（哪怕 404），说明 fetch 这条路本身是通的，
+			// 不能算「这个环境用不了 fetch」—— 否则一批 404 之后 fetch 就被永久
+			// 关掉，在 Android 上（引擎下载本来就是坏的）等于直接判死刑
+			fetchMisses = 0;
+		}
 		if (viaFetch.fatal || fetchMisses >= FETCH_MISS_LIMIT) {
 			fetchUsable = false;
 		}
@@ -436,7 +444,7 @@ export function buildSources() {
 }
 
 /** 依次换源下载同一个文件，任何一个源拿到的内容哈希对得上就成功 */
-async function downloadVerified(relative, target, expected, onAttempt) {
+async function downloadVerified(relative, target, expected, onAttempt, options = {}) {
 	const sources = buildSources();
 	if (!sources.length) {
 		return { ok: false, reason: "仓库地址没填" };
@@ -444,38 +452,70 @@ async function downloadVerified(relative, target, expected, onAttempt) {
 	// 收集每个源的失败原因 —— 以前只留最后一条，结果 Android 上永远显示
 	// 「raw.githubusercontent.com 连接失败」，把真正的原因（API 不可用）盖掉了
 	const problems = [];
-	for (const base of sources) {
-		if (onAttempt) {
-			onAttempt(base);
-		}
-		const host = new URL(base).host;
-		const attempt = await tryDownload(base + encodeURI(relative), target);
+	let sawStale = false;
+
+	/**
+	 * 从某个源下载一次并校验。
+	 *
+	 * `bust` = 在 URL 后面挂一个时间戳查询串。**这不是装饰**：GitHub raw 和几个
+	 * 加速源都会带 `Cache-Control: max-age=300`，也就是同名 URL 上的内容会被缓存
+	 * 5 分钟。发布新版本后玩家要是马上点检查更新，拉到的就是**上一版**的文件，
+	 * 表现成一片「长度不符 / 内容校验失败」（明明网络是通的）。换个查询串就是另一个
+	 * 缓存条目，能立刻拿到新内容。
+	 */
+	const fromSource = async (base, bust) => {
+		const url = base + encodeURI(relative) + (bust ? `?t=${Date.now()}` : "");
+		const attempt = await tryDownload(url, target);
 		if (!attempt.ok) {
-			problems.push(`${host}: ${attempt.reason}`);
-			continue;
+			return { ok: false, reason: attempt.reason };
 		}
 		const data = await readAsync(target);
 		if (!data) {
-			problems.push(`${host}: 下完了却读不回来`);
-			continue;
+			return { ok: false, reason: "下完了却读不回来" };
 		}
 		const size = byteLength(data);
 		// ★ expected 可能是 null（清单自己就没什么可校验的，只能靠 JSON.parse 兜底），
 		//   所以必须先判它存在再读它的字段
 		if (expected && typeof expected.size == "number" && size !== expected.size) {
-			problems.push(`${host}: 长度不符（拿到 ${size}，应该是 ${expected.size}）`);
-			await removeAsync(target);
-			continue;
+			return { ok: false, stale: true, reason: `长度不符（拿到 ${size}，应该是 ${expected.size}）` };
 		}
 		if (expected && expected.md5 && md5(data) !== expected.md5) {
-			problems.push(`${host}: 内容校验失败`);
-			await removeAsync(target);
-			continue;
+			return { ok: false, stale: true, reason: "内容校验失败" };
 		}
 		return { ok: true, data };
+	};
+
+	for (const base of sources) {
+		if (onAttempt) {
+			onAttempt(base);
+		}
+		const host = new URL(base).host;
+		const first = await fromSource(base, options.bust);
+		if (first.ok) {
+			return { ok: true, data: first.data };
+		}
+		if (first.stale) {
+			// 内容对不上但请求本身是通的 —— 先当成缓存，在同一个源上带查询串再试一次。
+			// 这一步很值：真正的原因是缓存时它能救回来，真错了也只是多一次请求。
+			sawStale = true;
+			await removeAsync(target);
+			const retried = await fromSource(base, true);
+			if (retried.ok) {
+				return { ok: true, data: retried.data };
+			}
+			problems.push(`${host}: ${first.reason}；绕过缓存重试仍失败（${retried.reason}）`);
+		} else {
+			problems.push(`${host}: ${first.reason}`);
+		}
+		await removeAsync(target);
 	}
 	// 只留前三条：四个源全挂时，弹窗里塞满报错反而看不清
-	return { ok: false, reason: problems.slice(0, 3).join("；") || "所有下载源都失败了" };
+	return {
+		ok: false,
+		reason:
+			(problems.slice(0, 3).join("；") || "所有下载源都失败了") +
+			(sawStale ? "。下到的内容像是下载源缓存下来的旧版本，过几分钟再试通常就好了" : ""),
+	};
 }
 
 // ── 版本记录 ────────────────────────────────────────────────────────
@@ -610,6 +650,11 @@ let busy = false;
  * }>} 失败时弹窗提示并返回 null
  */
 export async function checkUpdates(options = {}) {
+	// 每次用户主动点检查更新，都重新给 fetch 一次机会：上一轮可能因为网络抖动
+	// 连续失败把它关掉了，没道理让这个判断一直留到下一次点击
+	fetchUsable = true;
+	fetchMisses = 0;
+
 	const spec = parseRepoSpec(getRepoSpec());
 	if (!spec) {
 		alert(
@@ -632,7 +677,10 @@ export async function checkUpdates(options = {}) {
 			null, // 清单本身没有哈希可校，靠下面的 JSON.parse 兜底
 			base => {
 				panel.setText(`正在读取清单…\n${new URL(base).host}`);
-			}
+			},
+			// ★ 清单必须每次都是**刚发布的**那一版：它被缓存 5 分钟的话，整个更新
+			//   会拿着一份旧清单去比对，然后报一堆莫名其妙的「长度不符」
+			{ bust: true }
 		);
 		if (!result.ok) {
 			lastReason = result.reason;
