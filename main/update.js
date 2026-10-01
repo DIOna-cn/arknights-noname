@@ -34,7 +34,8 @@ import { game, lib } from "noname";
 // ── 仓库位置 ────────────────────────────────────────────────────────
 // 形如 "用户名/仓库名@分支"。可以在「扩展 → 方舟 → 在线更新」里改，
 // 改了之后所有检查都走新地址（换源、换分支、别人 fork 一份自己发布都靠它）。
-const DEFAULT_REPO = "__GITHUB_USER__/arknights-noname@main";
+const PLACEHOLDER_OWNER = "__GITHUB_USER__";
+const DEFAULT_REPO = `${PLACEHOLDER_OWNER}/arknights-noname@main`;
 export { DEFAULT_REPO };
 
 /** 清单文件名（放在仓库根目录） */
@@ -275,7 +276,10 @@ export function parseRepoSpec(spec) {
 	}
 	const owner = path.slice(0, slash).trim();
 	const repo = path.slice(slash + 1).trim();
-	if (!owner || !repo) {
+	// ★ 占位符要当成「没填」。否则它会是一个「语法合法」的用户名，
+	//   于是更新器一本正经地去拉 raw.githubusercontent.com/__GITHUB_USER__/…
+	//   然后每个文件都 404，报错信息还完全指不到真正的原因。
+	if (!owner || !repo || owner === PLACEHOLDER_OWNER) {
 		return null;
 	}
 	return { owner, repo, branch: branch.trim() || "main" };
@@ -438,7 +442,12 @@ let busy = false;
 export async function checkUpdates(options = {}) {
 	const spec = parseRepoSpec(getRepoSpec());
 	if (!spec) {
-		alert("更新源地址没填对。\n请在「扩展 → 方舟 → 在线更新」里按 `用户名/仓库名@分支` 的格式填写。");
+		alert(
+			"更新源地址没填对，没法检查更新。\n\n" +
+				`当前填的是：${getRepoSpec()}\n\n` +
+				"请在「扩展 → 方舟 → 在线更新 → 更新源」里按「用户名/仓库名@分支」的格式填写，" +
+				"例如 someone/arknights-noname@main。"
+		);
 		return null;
 	}
 
