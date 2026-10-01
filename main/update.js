@@ -511,17 +511,41 @@ export async function getLocalVersion() {
 }
 
 // ── 进度浮层 ────────────────────────────────────────────────────────
-/** 极简浮层：不依赖引擎 UI 内部结构，更新完页面就要重载了，不值得做得更花 */
+/**
+ * 极简浮层：不依赖引擎 UI 内部结构，更新完页面就要重载了，不值得做得更花
+ *
+ * 坑：layout/default/layout.css 里有全局 `div { display:inline-block; position:absolute; transition:all .5s }`，
+ * 所以这里的每个 div 都必须在**内联样式**里显式写回 position:static / display:block。
+ * 否则子元素全部脱离文档流，父层高度塌成 0，几行字叠在左上角糊成一团（PC 和手机一样）。
+ */
 function createProgressPanel(title) {
+	// 先把引擎的全局 div 样式按回去，具体尺寸各自在后面覆盖
+	const box = [
+		"position:static",
+		"display:block",
+		"left:auto",
+		"top:auto",
+		"right:auto",
+		"bottom:auto",
+		"width:auto",
+		"height:auto",
+		"margin:0",
+		"padding:0",
+		"transition:none",
+		"box-sizing:border-box",
+	].join(";");
 	const panel = document.createElement("div");
 	panel.style.cssText = [
+		box,
 		"position:fixed",
 		"left:50%",
 		"top:50%",
 		"transform:translate(-50%,-50%)",
+		"width:320px",
+		"max-width:86vw",
+		"max-height:70vh",
+		"overflow:auto",
 		"z-index:10000",
-		"min-width:320px",
-		"max-width:70vw",
 		"padding:18px 22px",
 		"border-radius:10px",
 		"background:rgba(20,20,24,0.92)",
@@ -534,13 +558,13 @@ function createProgressPanel(title) {
 	].join(";");
 	const head = document.createElement("div");
 	head.textContent = title;
-	head.style.cssText = "font-weight:bold;margin-bottom:8px;color:#7ec8ff";
+	head.style.cssText = `${box};font-weight:bold;margin-bottom:8px;color:#7ec8ff`;
 	const detail = document.createElement("div");
-	detail.style.cssText = "font-size:13px;color:#bbb;word-break:break-all;min-height:1.5em";
+	detail.style.cssText = `${box};font-size:13px;color:#bbb;word-break:break-all;white-space:pre-wrap;min-height:1.5em`;
 	const bar = document.createElement("div");
-	bar.style.cssText = "margin-top:10px;height:6px;border-radius:3px;background:#3a3a44;overflow:hidden";
+	bar.style.cssText = `${box};margin-top:10px;height:6px;border-radius:3px;background:#3a3a44;overflow:hidden`;
 	const fill = document.createElement("div");
-	fill.style.cssText = "height:100%;width:0%;background:#7ec8ff;transition:width .15s";
+	fill.style.cssText = `${box};height:100%;width:0%;background:#7ec8ff;transition:width .15s`;
 	bar.appendChild(fill);
 	panel.appendChild(head);
 	panel.appendChild(detail);
