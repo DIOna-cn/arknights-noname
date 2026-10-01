@@ -45,6 +45,8 @@ const MIRROR_PREFIX = ["https://ghproxy.net/", "https://gh-proxy.com/", "https:/
 
 /** 单个文件的下载超时（毫秒）。首次全量时大立绘可能要十几秒，给足 */
 const TIMEOUT = 120000;
+/** fetch 那一路单独用更短的超时 —— 它失败得干脆，得尽快决定要不要换通道 */
+const FETCH_TIMEOUT = 20000;
 /** 同时下载几个文件。引擎每次下载都会写两遍 brokenFile 配置，并发太高反而卡 */
 const CONCURRENCY = 4;
 
@@ -168,6 +170,48 @@ function joinPath(dir, relative) {
 	return (dir + relative).replace(/\/{2,}/g, "/");
 }
 
+// ── 平台差异（PC 走 init/node.js，Android 走 init/cordova.js）─────────
+//
+// 两边的 game.writeFile 吃的东西**不一样**：
+//   · PC：最终走 fs.writeFile，要 Buffer / Uint8Array；给 Blob 会被 new Uint8Array(blob) 弄坏
+//   · Android：最终走 HTML5 FileWriter.write()，**只接受 Blob**；给 ArrayBuffer 直接抛错
+// 所以同一份数据要按平台包成不同的形状。
+const IS_CORDOVA =
+	typeof window != "undefined" && (typeof window.resolveLocalFileSystemURL == "function" || !!window.cordova);
+
+/** 按平台把待写入的数据调整成 game.writeFile 能接受的样子 */
+function wrapForWrite(data) {
+	if (!IS_CORDOVA) {
+		return data;
+	}
+	try {
+		return new Blob([data]);
+	} catch (e) {
+		return data;
+	}
+}
+
+/**
+ * 统一取字节数。
+ *
+ * ★ 这是 Android 兼容的另一个关键：PC 的 game.readFile 回的是 Node Buffer（有 `.length`），
+ *   而 Android 的走 `FileReader.readAsArrayBuffer`，回的是 **ArrayBuffer** —— 它**没有 `.length`**，
+ *   只有 `.byteLength`。用 `data.length` 判长度时，Android 上永远得到 `undefined`，
+ *   于是**每个文件都会被误判成「长度不符」**，哪怕下载完全成功也更新不了。
+ */
+function byteLength(data) {
+	if (!data) {
+		return 0;
+	}
+	if (typeof data.byteLength == "number") {
+		return data.byteLength;
+	}
+	if (typeof data.length == "number") {
+		return data.length;
+	}
+	return 0;
+}
+
 function readAsync(path) {
 	return new Promise(resolve => {
 		try {
@@ -181,7 +225,7 @@ function readAsync(path) {
 function writeAsync(data, dir, name) {
 	return new Promise(resolve => {
 		try {
-			game.writeFile(data, dir, name, error => resolve(!error));
+			game.writeFile(wrapForWrite(data), dir, name, error => resolve(!error));
 		} catch (e) {
 			resolve(false);
 		}
@@ -219,14 +263,24 @@ function removeDirAsync(dir) {
 }
 
 /**
- * 下载到指定路径。
+ * 走引擎自带的 game.download。
  *
- * ⚠ game.download 的 onerror 只在「流出错」时触发，HTTP 404/403 会走 onsuccess
- *   并把错误页写下来。所以这里只把它当作「拉到了一个文件」，
- *   内容对不对一律由调用方的哈希校验说了算。
+ * PC 上它是 `https.get` + `fs.createWriteStream`，挺稳。但它有两个已知毛病：
+ *
+ * ① **只看「流出没出错」，不看 HTTP 状态码** —— 服务器返 404 时它会把错误页
+ *    照样写进目标文件，然后照样调 onsuccess。所以内容对不对必须另外用哈希校验。
+ *
+ * ② **Android 上它依赖 `cordova-plugin-file-transfer`**（init/cordova.js 里是
+ *    `new FileTransfer()`），那插件早已废弃、很多时候根本没装 —— 缺席时构造函数
+ *    直接抛异常。**必须把这个原因如实报出来**，否则它会被误读成「网络不通」，
+ *    而真正的问题其实在 API 层面。
  */
-function downloadAsync(url, target) {
+function engineDownloadAsync(url, target) {
 	return new Promise(resolve => {
+		if (typeof game.download != "function") {
+			resolve({ ok: false, reason: "这个环境没有 game.download" });
+			return;
+		}
 		let settled = false;
 		const finish = value => {
 			if (!settled) {
@@ -234,25 +288,110 @@ function downloadAsync(url, target) {
 				resolve(value);
 			}
 		};
-		const timer = setTimeout(() => finish(false), TIMEOUT);
+		const timer = setTimeout(() => finish({ ok: false, reason: "引擎下载超时" }), TIMEOUT);
 		try {
 			game.download(
 				url,
 				target,
 				() => {
 					clearTimeout(timer);
-					finish(true);
+					finish({ ok: true });
 				},
-				() => {
+				error => {
 					clearTimeout(timer);
-					finish(false);
+					const detail = error && (error.code != null ? `code ${error.code}` : error.message || error);
+					finish({ ok: false, reason: `引擎下载出错${detail ? `（${detail}）` : ""}` });
 				}
 			);
 		} catch (e) {
 			clearTimeout(timer);
-			finish(false);
+			finish({ ok: false, reason: `引擎下载不可用（${(e && e.message) || e}）` });
 		}
 	});
+}
+
+/**
+ * 用 fetch 抓成 ArrayBuffer 再落盘。
+ *
+ * 比 game.download 好在三点：**能看 HTTP 状态码**、自动跟随重定向、
+ * 而且**走的是 WebView 自己的网络栈**（不依赖 cordova 那个废弃插件，
+ * 也能吃到系统 VPN/代理）。
+ *
+ * 代价是受同源策略约束，需要服务端给 CORS 头 —— 我们用的四个源实测都回了
+ * `Access-Control-Allow-Origin: *`，所以在 `file://` 页面里也能用。
+ */
+async function fetchToFile(url, target) {
+	if (typeof fetch != "function") {
+		return { ok: false, fatal: true, reason: "这个环境没有 fetch" };
+	}
+	let response;
+	try {
+		const controller = typeof AbortController == "function" ? new AbortController() : null;
+		const timer = controller ? setTimeout(() => controller.abort(), FETCH_TIMEOUT) : null;
+		response = await fetch(url, controller ? { signal: controller.signal } : {});
+		if (timer) {
+			clearTimeout(timer);
+		}
+	} catch (e) {
+		// 到这里可能是被 CORS 拦了、没网、超时，**也可能只是这一个源挂了** ——
+		// 浏览器出于安全考虑不会告诉我们是哪一种。所以这里**绝不能**标成 fatal：
+		// 一旦因为单个源失败就禁用 fetch，在 Android 上（引擎下载本来就是坏的）
+		// 后面几个源就全废了，整个更新直接失败。要不要放弃 fetch 交给
+		// tryDownload 去累计判断。
+		return { ok: false, fatal: false, reason: `fetch 失败（${(e && e.name) || "未知错误"}）` };
+	}
+	if (!response.ok) {
+		// 4xx/5xx 是**这个源**的问题，换一个源就好，fetch 本身是可用的
+		return { ok: false, fatal: false, reason: `HTTP ${response.status}` };
+	}
+	let buffer;
+	try {
+		buffer = await response.arrayBuffer();
+	} catch (e) {
+		return { ok: false, fatal: false, reason: "读取响应体失败" };
+	}
+	const slash = target.lastIndexOf("/");
+	const dir = slash >= 0 ? target.slice(0, slash) : "";
+	const name = slash >= 0 ? target.slice(slash + 1) : target;
+	if (!(await writeAsync(buffer, dir, name))) {
+		return { ok: false, fatal: false, reason: "写文件失败" };
+	}
+	return { ok: true };
+}
+
+/**
+ * 一条通道不通就换另一条。
+ *
+ * 关于什么时候才放弃 fetch：**不能因为一次失败就放弃**。单个下载源挂掉时
+ * fetch 同样会抛 TypeError，而它在 Android 上本来是唯一的通道（引擎那个依赖
+ * 早已废弃的 FileTransfer 插件）。所以这里只累计失败次数，连续失败到
+ * FETCH_MISS_LIMIT 才认定「这个环境用不了 fetch」，让位给引擎下载。
+ */
+let fetchUsable = true;
+let fetchMisses = 0;
+/** 连续失败这么多次之后才判定 fetch 在这个环境不可用 */
+const FETCH_MISS_LIMIT = 6;
+
+async function tryDownload(url, target) {
+	const problems = [];
+	if (fetchUsable && typeof fetch == "function") {
+		const viaFetch = await fetchToFile(url, target);
+		if (viaFetch.ok) {
+			fetchMisses = 0;
+			return { ok: true, via: "fetch" };
+		}
+		problems.push(viaFetch.reason);
+		fetchMisses++;
+		if (viaFetch.fatal || fetchMisses >= FETCH_MISS_LIMIT) {
+			fetchUsable = false;
+		}
+	}
+	const viaEngine = await engineDownloadAsync(url, target);
+	if (viaEngine.ok) {
+		return { ok: true, via: "game.download" };
+	}
+	problems.push(viaEngine.reason);
+	return { ok: false, reason: problems.join("；") };
 }
 
 // ── 仓库地址与下载源 ────────────────────────────────────────────────
@@ -302,35 +441,41 @@ async function downloadVerified(relative, target, expected, onAttempt) {
 	if (!sources.length) {
 		return { ok: false, reason: "仓库地址没填" };
 	}
-	let lastReason = "所有下载源都失败了";
+	// 收集每个源的失败原因 —— 以前只留最后一条，结果 Android 上永远显示
+	// 「raw.githubusercontent.com 连接失败」，把真正的原因（API 不可用）盖掉了
+	const problems = [];
 	for (const base of sources) {
 		if (onAttempt) {
 			onAttempt(base);
 		}
-		if (!(await downloadAsync(base + encodeURI(relative), target))) {
-			lastReason = `${new URL(base).host} 连接失败`;
+		const host = new URL(base).host;
+		const attempt = await tryDownload(base + encodeURI(relative), target);
+		if (!attempt.ok) {
+			problems.push(`${host}: ${attempt.reason}`);
 			continue;
 		}
 		const data = await readAsync(target);
 		if (!data) {
-			lastReason = `${new URL(base).host} 拿不到文件`;
+			problems.push(`${host}: 下完了却读不回来`);
 			continue;
 		}
+		const size = byteLength(data);
 		// ★ expected 可能是 null（清单自己就没什么可校验的，只能靠 JSON.parse 兜底），
-		//   所以这里必须先判 expected 存在再读它的字段
-		if (expected && typeof expected.size == "number" && data.length !== expected.size) {
-			lastReason = `${new URL(base).host} 长度不符（${data.length} ≠ ${expected.size}）`;
+		//   所以必须先判它存在再读它的字段
+		if (expected && typeof expected.size == "number" && size !== expected.size) {
+			problems.push(`${host}: 长度不符（拿到 ${size}，应该是 ${expected.size}）`);
 			await removeAsync(target);
 			continue;
 		}
 		if (expected && expected.md5 && md5(data) !== expected.md5) {
-			lastReason = `${new URL(base).host} 内容校验失败`;
+			problems.push(`${host}: 内容校验失败`);
 			await removeAsync(target);
 			continue;
 		}
 		return { ok: true, data };
 	}
-	return { ok: false, reason: lastReason };
+	// 只留前三条：四个源全挂时，弹窗里塞满报错反而看不清
+	return { ok: false, reason: problems.slice(0, 3).join("；") || "所有下载源都失败了" };
 }
 
 // ── 版本记录 ────────────────────────────────────────────────────────
@@ -524,7 +669,7 @@ export async function checkUpdates(options = {}) {
 			bytes += expected.size || 0;
 			continue;
 		}
-		if (typeof expected.size == "number" && data.length !== expected.size) {
+		if (typeof expected.size == "number" && byteLength(data) !== expected.size) {
 			changed.push(relative);
 			bytes += expected.size || 0;
 			continue;
