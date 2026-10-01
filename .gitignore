@@ -1,0 +1,8 @@
+# 一键推送脚本是给本机用的，不进仓库
+推送到GitHub.bat
+*.bat
+
+# 凭据一律不入库
+.token
+*.token
+.git-credentials
