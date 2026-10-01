@@ -1,9 +1,9 @@
 {
 	"name": "方舟",
 	"version": "2.2.0",
-	"generated": "2026-10-01T15:40:34.222Z",
+	"generated": "2026-10-01T15:45:16.993Z",
 	"count": 206,
-	"size": 40258694,
+	"size": 40258696,
 	"files": {
 		"ajln_angelina.png": {
 			"size": 539861,
@@ -138,8 +138,8 @@
 			"md5": "1d7c89c510d7c15149fa5fa016de5f20"
 		},
 		"info.json": {
-			"size": 426,
-			"md5": "3d8606ed2cdcbbe257373da42393cc78"
+			"size": 428,
+			"md5": "6ad55bd2ab167a9e3475f64ddb566af3"
 		},
 		"jie_xie.jpg": {
 			"size": 109222,
