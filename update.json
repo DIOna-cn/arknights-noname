@@ -1,9 +1,9 @@
 {
 	"name": "方舟",
 	"version": "2.2.0",
-	"generated": "2026-10-01T15:05:31.145Z",
+	"generated": "2026-10-01T15:07:56.080Z",
 	"count": 206,
-	"size": 40257091,
+	"size": 40257289,
 	"files": {
 		"ajln_angelina.png": {
 			"size": 539861,
@@ -178,8 +178,8 @@
 			"md5": "5d71d9134e4de5a5698c0e6600960f37"
 		},
 		"main/update.js": {
-			"size": 23658,
-			"md5": "e8888b5dd9f53dc317b230c637284f02"
+			"size": 23856,
+			"md5": "dd05fd837b8b849724d5fa94cfeca642"
 		},
 		"nian_nian.png": {
 			"size": 375847,

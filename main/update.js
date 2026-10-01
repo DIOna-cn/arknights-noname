@@ -311,12 +311,14 @@ async function downloadVerified(relative, target, expected, onAttempt) {
 			lastReason = `${new URL(base).host} 拿不到文件`;
 			continue;
 		}
-		if (typeof expected.size == "number" && data.length !== expected.size) {
+		// ★ expected 可能是 null（清单自己就没什么可校验的，只能靠 JSON.parse 兜底），
+		//   所以这里必须先判 expected 存在再读它的字段
+		if (expected && typeof expected.size == "number" && data.length !== expected.size) {
 			lastReason = `${new URL(base).host} 长度不符（${data.length} ≠ ${expected.size}）`;
 			await removeAsync(target);
 			continue;
 		}
-		if (expected.md5 && md5(data) !== expected.md5) {
+		if (expected && expected.md5 && md5(data) !== expected.md5) {
 			lastReason = `${new URL(base).host} 内容校验失败`;
 			await removeAsync(target);
 			continue;
