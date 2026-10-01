@@ -550,6 +550,27 @@ export async function getLocalVersion() {
 	}
 }
 
+/**
+ * 比较 "2.2.3" 这种版本号：a > b 返回 1，a < b 返回 -1，相等返回 0。
+ * 用来判断**远端清单是不是比本地还旧** —— 那说明拉到的是缓存里的上一版。
+ */
+export function compareVersion(a, b) {
+	const parse = value =>
+		String(value || "")
+			.split(".")
+			.map(part => parseInt(part, 10) || 0);
+	const left = parse(a);
+	const right = parse(b);
+	for (let i = 0; i < Math.max(left.length, right.length); i++) {
+		const x = left[i] || 0;
+		const y = right[i] || 0;
+		if (x !== y) {
+			return x > y ? 1 : -1;
+		}
+	}
+	return 0;
+}
+
 // ── 进度浮层 ────────────────────────────────────────────────────────
 /**
  * 极简浮层：不依赖引擎 UI 内部结构，更新完页面就要重载了，不值得做得更花
@@ -697,6 +718,7 @@ export async function checkUpdates(options = {}) {
 
 	if (!manifest || !manifest.files) {
 		panel.close();
+		await removeDirAsync(TMP_DIR.replace(/\/$/, ""));
 		alert(
 			`读取更新清单失败。\n\n仓库：${spec.owner}/${spec.repo}@${spec.branch}\n` +
 				`原因：${lastReason || "未知"}\n\n` +
@@ -707,6 +729,22 @@ export async function checkUpdates(options = {}) {
 
 	const localVersion = await getLocalVersion();
 	const remoteVersion = String(manifest.version || "");
+
+	// ★ 远端清单比本地还旧 —— 几乎只可能是下载源缓存了上一版（GitHub raw 会回
+	//   `Cache-Control: max-age=300`，而且它的缓存键**不看查询串**，挂 `?t=` 也绕不过，
+	//   这条是实测出来的）。这时候绝不能当成「有新版本」往下走：那会拿着旧清单去核对
+	//   每个文件，报出一片莫名其妙的「长度不符」，界面上还像是要把扩展降级。
+	if (remoteVersion && localVersion && compareVersion(remoteVersion, localVersion) < 0) {
+		panel.close();
+		await removeDirAsync(TMP_DIR.replace(/\/$/, ""));
+		alert(
+			`下载源给回来的还是上一版清单（本地 ${localVersion}，远端 ${remoteVersion}），本次检查已停下。\n\n` +
+				"仓库刚发布后的几分钟里，下载源会继续发缓存里的旧清单 —— 这是它自己的行为，本地文件完全没问题。\n" +
+				"过几分钟再点一次就好；要是一直如此，就该检查「更新源」里的分支填得对不对。"
+		);
+		return null;
+	}
+
 	const upToDate =
 		!options.force && remoteVersion && remoteVersion === localVersion && remoteVersion === getAppliedVersion();
 
