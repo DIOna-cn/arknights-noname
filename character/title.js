@@ -43,6 +43,8 @@ const characterTitles = {
 	nian_nian: "洪炉示岁",
 	// 藿藿：称号来自作者描述文件的表头
 	hh_huohuo: "令奉贞凶",
+	// 芙兰朵露：称号来自素材的 武将.json（title 字段）
+	fld_flandre: "恶魔之妹",
 };
 
 export default characterTitles;

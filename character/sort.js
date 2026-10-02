@@ -39,6 +39,8 @@ const characterSort = {
 	ak_chen: ["chen_chen"],
 	// 藿藿：称号「令奉贞凶」，单独占一组
 	ak_huohuo: ["hh_huohuo"],
+	// 芙兰朵露：称号「恶魔之妹」，单独占一组
+	ak_flandre: ["fld_flandre"],
 	// 沙包：测试用的白板靶子，单独占一组（不给它称号，分组名直接用武将名）
 	ak_shaba: ["shaba"],
 };
@@ -70,6 +72,7 @@ const characterSortTranslate = {
 	ak_nian: "洪炉示岁",
 	ak_chen: "龙门警司",
 	ak_huohuo: "令奉贞凶",
+	ak_flandre: "恶魔之妹",
 	ak_shaba: "沙包",
 };
 

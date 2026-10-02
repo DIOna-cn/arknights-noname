@@ -3215,6 +3215,186 @@ function chenBadaoWorth(trigger, player) {
 	return true;
 }
 
+// ══════════════════════════════════════════════════════════════════
+// 芙兰朵露 · 恶魔之妹 —— 「目」体系的公共逻辑
+//
+// 「目」是**扣在各自武将牌上的实体牌**（骨架同钟会【权计】的「权」、
+// 黍的「种」）：
+//     owner.addToExpansion([card], giver, "give")
+//     next.gaintag.add(FLD_MU)
+//     owner.addSkill(FLD_MU)
+// 全场的判据一律走 getExpansions / countExpansions(FLD_MU)，
+// 而 FLD_MU 这个技能名必须与 gaintag **一字不差**（理由见下面 shu_zhong 的注释：
+// 引擎的 expansion 分支是按 card.hasGaintag(技能名) 找牌的）。
+// ══════════════════════════════════════════════════════════════════
+
+/** 「目」的 gaintag，同时也是那个「标记技能」的技能名 */
+const FLD_MU = "fld_mu";
+
+/** 这人武将牌上的「目」 */
+function fldMuOf(player) {
+	return player.getExpansions(FLD_MU);
+}
+
+/** 全场所有「目」—— 连已阵亡角色武将牌上的也算（残局不漏账） */
+function fldAllMu() {
+	const list = [];
+	for (const current of game.players.concat(game.dead || [])) {
+		for (const card of fldMuOf(current)) {
+			list.push(card);
+		}
+	}
+	return list;
+}
+
+/** 场上「目」的牌名集合 —— 【星虹】「与场上目同名」的判据 */
+function fldMuNames() {
+	const names = new Set();
+	for (const card of fldAllMu()) {
+		names.add(card.name);
+	}
+	return names;
+}
+
+/**
+ * 这张牌是不是「与场上某个目同名」——【星虹】那三条护身符的判据。
+ *
+ * 注意它问的是**当下**的场上（目被破坏掉之后，同名牌的保护也就随之消失），
+ * 而不是「摸到的时候是不是同名」。描述写的是「你拥有的**此类**牌」，
+ * 所以每张牌每次都要重新对一遍。
+ */
+function fldIsMuMatch(card) {
+	if (!card || !card.name) {
+		return false;
+	}
+	return fldMuNames().has(card.name);
+}
+
+/** 武将牌上没有「目」了就把标记技能摘掉，免得边上挂着一个空的「目」 */
+function fldSyncMu(player) {
+	if (!player) {
+		return;
+	}
+	if (player.countExpansions(FLD_MU) <= 0 && player.hasSkill(FLD_MU)) {
+		player.removeSkill(FLD_MU);
+	}
+}
+
+/**
+ * 让 giver 把一张手牌扣到 owner 的武将牌上，称为「目」。
+ *
+ * 【星虹】那条「其需将一张手牌置于武将牌上」里 owner 就是 giver 本人
+ * （作者口径：各自扣在**自己的**武将牌上），参数留着 owner 是为了
+ * 以后万一有「把目挪给别人」的写法能直接复用。
+ *
+ * 返回是否真的扣上了一张。
+ */
+async function fldPlaceMu(owner, giver, prompt) {
+	if (!giver.countCards("h")) {
+		return false;
+	}
+	const result = await giver
+		.chooseCard("h", true, prompt)
+		// 「任意一张手牌」由放牌的人自己挑，AI 只给最不值钱的那张正分
+		.set("ai", card => 6 - get.value(card))
+		.forResult();
+	if (!result.bool || !result.cards || !result.cards.length) {
+		return false;
+	}
+	const card = result.cards[0];
+	const next = owner.addToExpansion([card], giver, "give");
+	next.gaintag.add(FLD_MU);
+	await next;
+	if (!owner.hasSkill(FLD_MU)) {
+		owner.addSkill(FLD_MU);
+	}
+	if (owner == giver) {
+		game.log(giver, "将", card, "置于其武将牌上，称为「目」");
+	} else {
+		game.log(giver, "将", card, "置于", owner, "的武将牌上，称为「目」");
+	}
+	return true;
+}
+
+/** 目标武将牌上每种牌名的「目」各有几张 */
+function fldMuByName(target) {
+	const map = new Map();
+	for (const card of fldMuOf(target)) {
+		map.set(card.name, (map.get(card.name) || 0) + 1);
+	}
+	return map;
+}
+
+/**
+ * 【破坏】这次最多能拆几对「手牌 + 同名目」—— 返回「牌名 → 可配对数」。
+ *
+ * ★ 每种牌名**各算各的**：手上攥着三张【杀】、目标身上只有一枚「杀」目，
+ *   那也只配得出一对。少了这一层，「以此法弃置 3 张牌」会被三张同名手牌
+ *   白送出去，而对应的「目」根本不够。
+ */
+function fldPohuaiQuota(target, player) {
+	const quota = new Map();
+	if (!target || !target.isIn()) {
+		return quota;
+	}
+	const mu = fldMuByName(target);
+	if (!mu.size) {
+		return quota;
+	}
+	const hand = new Map();
+	for (const card of player.getCards("h")) {
+		hand.set(card.name, (hand.get(card.name) || 0) + 1);
+	}
+	for (const [name, num] of mu) {
+		const own = hand.get(name) || 0;
+		const pair = Math.min(num, own);
+		if (pair > 0) {
+			quota.set(name, pair);
+		}
+	}
+	return quota;
+}
+
+/** 上面那张表一共能配几对 */
+function fldPohuaiMax(quota) {
+	let num = 0;
+	for (const value of quota.values()) {
+		num += value;
+	}
+	return num;
+}
+
+/**
+ * 【破坏】选牌时的单张判据。
+ *
+ * 光写「牌名在名单里」是不够的（那会让她一次点三张【杀】而目标只有一枚
+ * 「杀」目），所以还要拿 `ui.selected.cards` 把**每种牌名的已选数**卡在配额内。
+ * 引擎的选牌界面在选牌过程中会实时维护 `ui.selected.cards`，官方大量技能
+ * 都是这么写动态上限的；AI 那条路走不到 `ui.selected`，于是它可能多选，
+ * 但 content 里的配对会把配不上的手牌原样留下（见 fld_pohuai.content）。
+ */
+function fldPohuaiFilterCard(card, player, target) {
+	const quota = fldPohuaiQuota(target, player);
+	const left = quota.get(card.name) || 0;
+	if (left <= 0) {
+		return false;
+	}
+	const selected = (typeof ui != "undefined" && ui.selected && ui.selected.cards) || [];
+	const used = selected.filter(current => current != card && current.name == card.name).length;
+	return used < left;
+}
+
+/**
+ * 沿着事件链往上找「这次结算属于哪一次 useCard」。
+ *
+ * getParent(name) 找不到时返回的是一个**空对象**（不是 undefined），
+ * 所以这里必须再核一次 name，不然 `use.fld_pohuai_plus` 会读到一个假对象。
+ */
+function fldUseCardOf(event) {
+	const use = event.getParent("useCard");
+	return use && use.name == "useCard" ? use : null;
+}
+
 const skills = {
 	// ══════════════════════════════════════════════════════════════
 	// 维什戴尔 · 绝对主角（群 / 4体力）
@@ -10044,6 +10224,346 @@ const skills = {
 		intro: {
 			name: "凭依",
 			content: "藿藿的【凭依】标记：拥有此标记的角色受到伤害后，伤害来源视为对藿藿造成过1点伤害（不实际造成伤害）。",
+		},
+	},
+	// ══ 芙兰朵露 · 恶魔之妹（蜀 / 3体力）══════════════════════════
+	// 素材：素材\芙兰朵露\武将.json（三个技能的原文）。
+	// 立绘真名是「立绘<U+200B>.jpg」（「绘」后面夹着零宽空格），
+	// 按扩展惯例改名存成 fld_flandre.jpg（本身就是 JPEG）。
+	//
+	// 三个技能围着同一套「目」转：
+	//   【星虹】让别人往**自己的**武将牌上扣一张手牌，管那叫「目」；
+	//          她每回合顺着这些「目」的牌名从牌堆里摸一张回来，
+	//          并且护着手里所有「与某个目同名」的牌（不占手牌上限、不可被弃置）。
+	//   【破坏】是她唯一的出刀口 —— 弃掉同名手牌、连对应的「目」一起拆掉，
+	//          换这一击不可响应，弃得越多收益越高。
+	//   【血痕】挨了打就得还手：每个阶段结束时都要对当前回合角色出一刀。
+	//
+	// ★「目」是**实体牌**（骨架同钟会【权计】的「权」、黍的「种」），判据与
+	//   增删分别走 fldMuOf / fldAllMu / fldPlaceMu，公共逻辑见文件上方的
+	//   芙兰朵露小节。这里只写三个技能自己的事。
+	// ══════════════════════════════════════════════════════════════
+
+	// ── 破坏 ──────────────────────────────────────────────────────
+	// 描述：当你使用能造成伤害的牌指定目标后，你可以弃置至少1张与目标「目」
+	//       牌名相同的手牌并弃置对应的「目」，令此牌不可响应，若你以此法弃置
+	//       至少1/2/3张牌，你获得以下效果：1.摸2张牌；2.此牌伤害+1；
+	//       3.目标失去1点体力。
+	//
+	// ★ 时机取 useCardToPlayered（**逐目标**的「指定目标后」，官方【转对】
+	//   往 directHit 里塞目标用的就是这一条）而不是 useCard / useCardToTargeted：
+	//   「目标「目」」这个说法本身就要求逐目标结算 —— 一张【杀】打三个人时，
+	//   每个人身上压着的「目」各不相同。
+	// ★ 1/2/3 数的是**弃置的手牌张数**（作者口径），一张手牌对应一枚「目」；
+	//   三档**累加**（作者口径）：≥1 摸 2 张，≥2 再加伤害，≥3 再加掉血。
+	fld_pohuai: {
+		audio: false,
+		group: ["fld_pohuai_damage"],
+		logTarget: "target",
+		trigger: { player: "useCardToPlayered" },
+		filter(event, player) {
+			// 「能造成伤害的牌」= 引擎的 get.tag(card, "damage")（【杀】与伤害类锦囊）
+			if (!get.tag(event.card, "damage")) {
+				return false;
+			}
+			return fldPohuaiMax(fldPohuaiQuota(event.target, player)) > 0;
+		},
+		// AI：只对敌人动刀（这一击要赔上自己的手牌与对方的「目」）
+		check(event, player) {
+			return get.attitude(player, event.target) < 0;
+		},
+		async content(event, trigger, player) {
+			const target = trigger.target;
+			const quota = fldPohuaiQuota(target, player);
+			const max = fldPohuaiMax(quota);
+			if (max <= 0) {
+				return;
+			}
+			const result = await player
+				.chooseCard({
+					prompt: `破坏：弃置至少一张与${get.translation(target)}的「目」牌名相同的手牌`,
+					position: "h",
+					selectCard: [1, max],
+					filterCard: card => fldPohuaiFilterCard(card, player, target),
+				})
+				.set("ai", card => 6 - get.value(card))
+				.forResult();
+			if (!result.bool || !result.cards || !result.cards.length) {
+				return;
+			}
+			// 逐张配对：一张手牌吃掉一张**同名**的「目」。
+			// 配不上对的手牌（AI 可能多选）原样留在手里，也不计入张数。
+			const rest = fldMuOf(target).slice();
+			const handCards = [];
+			const muCards = [];
+			for (const card of result.cards) {
+				const idx = rest.findIndex(mu => mu.name == card.name);
+				if (idx < 0) {
+					continue;
+				}
+				muCards.push(rest.splice(idx, 1)[0]);
+				handCards.push(card);
+			}
+			const num = handCards.length;
+			if (!num) {
+				return;
+			}
+			game.log(player, "弃置了", handCards, "，并拆掉了", target, "的「目」", muCards);
+			// ★ 这里必须走 player.discard（强制弃置）：星虹的 mod.cardDiscardable
+			//   把「与目同名的手牌」锁住了，而破坏弃置它们正是**唯一的例外**。
+			//   player.discard 的 content 只做 lose，不查 cardDiscardable /
+			//   canBeDiscarded（只有 modedDiscard ——弃牌阶段走的那条——才查），
+			//   所以这个后门是白送的，不用临时改 mod。
+			await player.discard(handCards);
+			await target.loseToDiscardpile(muCards);
+			fldSyncMu(target);
+			// 「令此牌不可响应」：directHit 是**这次 useCard 的**目标名单
+			// （各 useCardToXxx 事件共用同一个数组引用），塞进去就只对这名目标生效。
+			if (Array.isArray(trigger.directHit) && !trigger.directHit.includes(target)) {
+				trigger.directHit.push(target);
+			}
+			// ① 摸 2 张牌
+			await player.draw(2);
+			// ② 此牌对其伤害 +1 —— 记在这次 useCard 上，由 fld_pohuai_damage 兑现
+			if (num >= 2) {
+				const use = fldUseCardOf(trigger);
+				if (use) {
+					if (!Array.isArray(use.fld_pohuai_plus)) {
+						use.fld_pohuai_plus = [];
+					}
+					use.fld_pohuai_plus.push(target);
+				}
+			}
+			// ③ 目标失去 1 点体力
+			if (num >= 3 && target.isIn()) {
+				await target.loseHp(1);
+			}
+		},
+	},
+
+	// 【破坏】②：令「此牌」对**那名**目标的伤害 +1。
+	//
+	// 判据是这次 useCard 事件上那份目标名单，而不是牌身上的标记 ——
+	// 一张【杀】可以同时打多个目标，破坏却是逐目标结算的（同一次使用里
+	// 可能只有其中一个目标挨了这 +1）。事件对象在结算期间是所有客户端共用的，
+	// 破坏的 content 又跑在每次结算里，所以联机下两边看到的是同一份名单。
+	fld_pohuai_damage: {
+		audio: false,
+		charlotte: true,
+		locked: true,
+		forced: true,
+		silent: true,
+		popup: false,
+		sourceSkill: "fld_pohuai",
+		trigger: { source: "damageBegin1" },
+		filter(event, player) {
+			const use = fldUseCardOf(event);
+			return !!use && Array.isArray(use.fld_pohuai_plus) && use.fld_pohuai_plus.includes(event.player);
+		},
+		async content(event, trigger, player) {
+			trigger.num += 1;
+		},
+	},
+
+	// ── 血痕 ──────────────────────────────────────────────────────
+	// 描述：锁定技，阶段结束时，若你受到过伤害，若你拥有【杀】，你需要对
+	//       当前回合角色使用一张无距离限制的【杀】。
+	//
+	// ★ 「阶段结束时」照**陈【形照】**那一套整组挂（作者指定参考【形照】）：
+	//   phaseChange 报的正是刚结束的那个阶段（引擎在进入下一个阶段**之前**
+	//   发这个时机），phaseEnd 补上最后一个阶段；开局那次 phaseChange
+	//   （num = 0）没有上一个阶段，所以 filter 要求 num >= 1。
+	// ★ 记账按**阶段**算：sub-skill fld_xuehen_hurt 每次受伤记一笔，
+	//   而「清账」写在 content 里 —— **不能写进 filter**：写进 filter 的话
+	//   「这一阶段结束时手里没【杀】」会把账一路留到下个阶段，变成隔了好几
+	//   个阶段还突然出刀。现在没【杀】就只是这一阶段的账作废。
+	// ★ 目标就是**当前回合角色**（作者口径）：轮到她自己的阶段结束时，
+	//   这一刀落在她自己身上。所以不能走 chooseUseTarget（【杀】的
+	//   filterTarget 把使用者本人排除在外），直接 player.useCard(card, target)
+	//   —— useCard 只负责组装事件，不做目标合法性检查。
+	// ★ 描述只写了「无距离限制」，没提次数，所以**照字面记账**：这次出刀
+	//   计入她这一回合的【杀】次数（引擎的 stat 每个回合都会给全场重铺，
+	//   所以别人的回合里出刀不会拖累她自己的出牌阶段）。
+	fld_xuehen: {
+		audio: false,
+		locked: true,
+		forced: true,
+		// 只有真的要出刀时才飘字 / 播报，所以关掉引擎的自动播报（同【形照】）
+		popup: false,
+		group: ["fld_xuehen_hurt"],
+		trigger: { global: ["phaseChange", "phaseEnd"] },
+		filter(event, player) {
+			return event.num >= 1 && player.countMark("fld_xuehen_hurt") > 0;
+		},
+		async content(event, trigger, player) {
+			// 先清账：这次结算的就是「刚才那个阶段」攒下的那一笔
+			player.removeMark("fld_xuehen_hurt", player.countMark("fld_xuehen_hurt"));
+			const target = _status.currentPhase;
+			if (!player.isIn() || !target || !target.isIn()) {
+				return;
+			}
+			const card = player.getCards("h", { name: "sha" })[0];
+			if (!card) {
+				return;
+			}
+			player.logSkill("fld_xuehen", target);
+			player.line(target, "red");
+			game.log(player, "必须对", target, "使用一张无距离限制的【杀】");
+			await player.useCard(card, target).set("nodistance", true);
+		},
+	},
+
+	// 【血痕】的记账：你于本阶段内受过伤害（只记真实伤害）。
+	//
+	// ★ 这里**排掉 unreal**：那是「视为受到过伤害」却不掉血的账（本扩展的
+	//   【护命】【尾巴】【凭依】都走它）。血痕是逼她真刀真枪还回去的锁定技，
+	//   拿一笔没掉血的记录去逼她出刀说不通。若哪天作者要改成「视为受伤也算」，
+	//   把下面 filter 里的 `!event.unreal` 去掉即可。
+	fld_xuehen_hurt: {
+		audio: false,
+		charlotte: true,
+		forced: true,
+		silent: true,
+		popup: false,
+		sourceSkill: "fld_xuehen",
+		trigger: { player: "damageEnd" },
+		filter(event, player) {
+			return event.num > 0 && !event.unreal;
+		},
+		async content(event, trigger, player) {
+			player.addMark("fld_xuehen_hurt", 1, false);
+		},
+	},
+
+	// ── 星虹 ──────────────────────────────────────────────────────
+	// 描述（三段都在同一条锁定技底下）：
+	//   ① 出牌阶段开始时，你从牌堆中抽取一张与场上「目」具有相同牌名的牌；
+	//   ② 你拥有的此类牌不计入你的手牌上限且不可被弃置；
+	//   ③ 每名其他角色的出牌阶段开始时或对你造成伤害时，其需将一张手牌
+	//      置于武将牌上称为「目」。
+	//
+	// ★ ② 的两条 mod 写在主技能身上就够，**不必做成全局技能**（对比辉夜
+	//   【难题】）：它们护的是芙兰朵露**自己的**手牌，而 cardDiscardable 的
+	//   checkMod 拥有者正是「动手弃牌的那个人」、canBeDiscarded 的拥有者是
+	//   「牌的持有者」—— 两个都落回她本人，不会问错人。
+	// ★ ② 的「不可被弃置」给【破坏】留了唯一一个后门，而且那是白送的：
+	//   破坏走 player.discard（content 里不查 cardDiscardable），见上面注释。
+	// ★ ③ 的「目」扣在**放牌那个人自己的**武将牌上（作者口径）—— 破坏里
+	//   「目标「目」」也只有这一个读法。
+	// ★ ③ 的受伤分支取 damageEnd 而不是 damage（同本扩展【护命】的口径）：
+	//   让这次伤害连濒死结算一起走完，再谈扣牌。
+	fld_xinghong: {
+		audio: false,
+		locked: true,
+		forced: true,
+		group: ["fld_xinghong_draw", "fld_xinghong_place", "fld_xinghong_hurt"],
+		mod: {
+			// ② 此类牌不占手牌上限 —— 按**张数**放宽，而不是把上限改成一个定值
+			maxHandcard(player, num) {
+				return num + player.countCards("h", fldIsMuMatch);
+			},
+			// ② 自己弃置（弃牌阶段、各种「弃置一张牌」的代价）——【破坏】除外
+			cardDiscardable(card, player) {
+				if (fldIsMuMatch(card)) {
+					return false;
+				}
+			},
+			// ② 被别人弃置 / 拿走（【过河拆桥】【顺手牵羊】走的都是
+			//    canBeDiscarded；签名是 (card, player, target)，player 是动手的
+			//    人、target 是牌的持有者）
+			canBeDiscarded(card, player, target) {
+				if (fldIsMuMatch(card)) {
+					return false;
+				}
+			},
+		},
+	},
+
+	// 【星虹】①：出牌阶段开始时，从牌堆里**随机**抽一张与场上某个「目」同名的牌。
+	// 场上一个「目」都没有时什么都抽不到，所以 filter 直接挡掉（免得空飘一次字）。
+	fld_xinghong_draw: {
+		audio: false,
+		charlotte: true,
+		locked: true,
+		forced: true,
+		sourceSkill: "fld_xinghong",
+		trigger: { player: "phaseUseBegin" },
+		filter(event, player) {
+			return fldMuNames().size > 0;
+		},
+		async content(event, trigger, player) {
+			const names = fldMuNames();
+			// 「随机抽一张」用 get.cardPile2 的第二个参数（同年的【锻器】）；
+			// 它只查不取，取走得自己 removeChild。
+			const card = get.cardPile2(item => names.has(item.name), "random");
+			if (!card) {
+				return;
+			}
+			card.original = "c";
+			ui.cardPile.removeChild(card);
+			game.updateRoundNumber();
+			game.log(player, "从牌堆中抽到了", card);
+			await player.gain(card, "gain2");
+		},
+	},
+
+	// 【星虹】③ 前半：每名其他角色的出牌阶段开始时，其需把一张手牌扣成「目」。
+	fld_xinghong_place: {
+		audio: false,
+		charlotte: true,
+		locked: true,
+		forced: true,
+		sourceSkill: "fld_xinghong",
+		trigger: { global: "phaseUseBegin" },
+		filter(event, player) {
+			return event.player != player && event.player.isIn() && event.player.countCards("h") > 0;
+		},
+		async content(event, trigger, player) {
+			const giver = trigger.player;
+			player.line(giver, "green");
+			await fldPlaceMu(giver, giver, "星虹：将一张手牌置于你的武将牌上，称为「目」");
+		},
+	},
+
+	// 【星虹】③ 后半：对你造成伤害的角色，其需把一张手牌扣成「目」。
+	// 同样排掉 unreal（「视为造成过伤害」并没有真的打到你）。
+	fld_xinghong_hurt: {
+		audio: false,
+		charlotte: true,
+		locked: true,
+		forced: true,
+		sourceSkill: "fld_xinghong",
+		trigger: { player: "damageEnd" },
+		filter(event, player) {
+			const source = event.source;
+			return (
+				!event.unreal && event.num > 0 && !!source && source != player && source.isIn() && source.countCards("h") > 0
+			);
+		},
+		async content(event, trigger, player) {
+			const source = trigger.source;
+			player.line(source, "green");
+			await fldPlaceMu(source, source, "星虹：将一张手牌置于你的武将牌上，称为「目」");
+		},
+	},
+
+	// 「目」的标记：扣在持有者的武将牌上，张数与明细都交给 intro 显示。
+	//
+	// ★ 技能名必须和 gaintag **一模一样** —— 引擎的 expansion 分支是按
+	//   `card.hasGaintag(技能名)` 找牌的（同黍的「种」「禾」、钟会的「权」）。
+	//   translate 里 fld_mu 译成「目」，所以牌角上的小标签也是这个字。
+	fld_mu: {
+		audio: false,
+		charlotte: true,
+		locked: true,
+		forced: true,
+		silent: true,
+		popup: false,
+		mark: true,
+		marktext: "目",
+		intro: {
+			content: "expansion",
+			markcount: "expansion",
 		},
 	},
 };

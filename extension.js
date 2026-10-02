@@ -365,6 +365,11 @@ const extensionPackage = {
 		),
 		note_huohuo: note("　　（无专用音效）"),
 
+		// ══ 芙兰朵露 · 恶魔之妹 ══
+		head_fld: head("<b>◆ 芙兰朵露 · 恶魔之妹</b>"),
+		note_fld: note("　　（三个技能都没有配音素材，全部走静音）"),
+		note_fld2: note("　　（「目」是扣在各自武将牌上的实体牌，同钟会的「权」）"),
+
 		// ══ 均（相见欢 / 律法）· 重岳 · 颉 · 黍 ══
 		head_jun: head("<b>◆ 均 · 相见欢　/　均 · 律法</b>"),
 		note_jun: note("　　（两个均是同名的独立武将，storage 键各带 xjh_ / lf_ 前缀）"),
@@ -498,6 +503,10 @@ const extensionPackage = {
 			"chen_chen.png",
 			// 藿藿：素材真名是「立绘.jpg」，按扩展惯例改成 <武将id>.jpg
 			"hh_huohuo.jpg",
+			// 芙兰朵露：素材真名是「立绘<U+200B>.jpg」（「绘」后面夹着零宽空格，
+			// 同 xjh_jun / nian_nian / zy_chongyue），按扩展惯例改名成 <武将id>.jpg；
+			// 它本身就是 JPEG，所以走 jpg 分支
+			"fld_flandre.jpg",
 		],
 		// 衍生卡牌图。辉夜的十张「神宝」不放进引擎的 image/card/
 		// （那是引擎自己的目录），而是走扩展自己的 image/card/，

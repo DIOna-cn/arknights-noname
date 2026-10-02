@@ -1,9 +1,9 @@
 {
 	"name": "方舟",
-	"version": "2.2.4",
-	"generated": "2026-10-01T16:31:59.171Z",
-	"count": 206,
-	"size": 40276027,
+	"version": "2.3.0",
+	"generated": "2026-10-02T03:42:04.107Z",
+	"count": 207,
+	"size": 40672777,
 	"files": {
 		"ajln_angelina.png": {
 			"size": 539861,
@@ -14,32 +14,32 @@
 			"md5": "bd23e2006881311da68d5e2291aa275d"
 		},
 		"character/character.js": {
-			"size": 19144,
-			"md5": "41771bc74a827115964c4fc1e2bc21da"
+			"size": 20454,
+			"md5": "9605c6449f80614215ec47c51585b037"
 		},
 		"character/index.js": {
 			"size": 2167,
 			"md5": "5a5b3fb69c0c27f74099d0ad77182d1a"
 		},
 		"character/intro.js": {
-			"size": 9113,
-			"md5": "e9e7292b8255a2ed6e07b85f5a3a2a63"
+			"size": 9691,
+			"md5": "122aeb9ad59489a53ee0201b4a63203b"
 		},
 		"character/skill.js": {
-			"size": 435396,
-			"md5": "20563bfb582c8c0febedfa2b25b21f4e"
+			"size": 457563,
+			"md5": "500099b72fd6b84e6d07010cf6000a64"
 		},
 		"character/sort.js": {
-			"size": 2412,
-			"md5": "3f1af8d4ea8c0083dd90dc674a00d307"
+			"size": 2533,
+			"md5": "4c9566ac13a1ad06c0ec4bc77b9e33ec"
 		},
 		"character/title.js": {
-			"size": 1896,
-			"md5": "111b544e84c0b796426101e1fab7469e"
+			"size": 1997,
+			"md5": "46cd44931a54e84c4b14d434a7d4a1bd"
 		},
 		"character/translate.js": {
-			"size": 46734,
-			"md5": "4b5e13bc016fd678ec32fc86ae985c1d"
+			"size": 49108,
+			"md5": "d26ea173c7abe46217993452bd04c404"
 		},
 		"chen_chen.png": {
 			"size": 600179,
@@ -58,8 +58,12 @@
 			"md5": "ef3b5fcb6c77b50024dc919facc9d509"
 		},
 		"extension.js": {
-			"size": 26165,
-			"md5": "ef1e5202d6a8bfb792c55d1bbe690602"
+			"size": 26731,
+			"md5": "6d2033d58ba9e7c25c110f958276b56b"
+		},
+		"fld_flandre.jpg": {
+			"size": 355258,
+			"md5": "768eadc96a743e3a6183ced1a98b5e3b"
 		},
 		"hfl_warfarin.png": {
 			"size": 309510,
@@ -139,7 +143,7 @@
 		},
 		"info.json": {
 			"size": 426,
-			"md5": "7b21c44f2371e78b2f09bdc764de2360"
+			"md5": "e4200f1793845903fa1b906e88b653c4"
 		},
 		"jie_xie.jpg": {
 			"size": 109222,
@@ -826,8 +830,8 @@
 			"md5": "5c6b1c4b8a76d5f73f8eef8085a7f8e0"
 		},
 		"说明.md": {
-			"size": 337611,
-			"md5": "afb32dd6f3c64d14bf680b5e6b99a6d4"
+			"size": 351886,
+			"md5": "4d201ba41299e4893e56aab1303fc49e"
 		}
 	}
 }
